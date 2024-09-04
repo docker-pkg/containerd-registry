@@ -1,0 +1,37 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+  schedule:
+    - cron: 0 0 * * 0
+
+defaults:
+  run:
+    shell: 'bash -Eeuo pipefail -x {0}'
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # build & run
+      - run: docker buildx build --pull --tag containerd-registry .
+      - run: |
+          sudo ctr version
+          test -S /run/containerd/containerd.sock
+          docker run -dit --name containerd-registry --mount type=bind,src=/run/containerd/containerd.sock,dst=/run/containerd/containerd.sock,ro --publish 5000:5000 containerd-registry
+
+      # test pulling
+      - run: sudo ctr content fetch docker.io/docker-pkg/true:oci
+      - run: docker run --rm localhost:5000/docker.io/docker-pkg/true:oci
+
+      # test pushing
+      - run: docker run --rm --network=container:containerd-registry gcr.io/go-containerregistry/crane copy docker-pkg/true:yoloci localhost:5000/totally-fake-never-exists:true-yoloci
+      - run: sudo ctr run --rm totally-fake-never-exists:true-yoloci true-yoloci
+
+      # test listing
+      - run: docker run --rm --network=container:containerd-registry gcr.io/go-containerregistry/crane catalog localhost:5000 | grep -E '^totally-fake-never-exists$'
+      - run: docker run --rm --network=container:containerd-registry gcr.io/go-containerregistry/crane ls localhost:5000/totally-fake-never-exists | grep -E '^true-yoloci$'
